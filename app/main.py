@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from .config.db import Base, engine
-from .routers import characters
+from .routers import characters, auth
 # from .routers import auth
 
 # Optional: If you need any startup/shutdown events, you can define them here:
@@ -11,6 +11,7 @@ app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
 app.include_router(characters.router, prefix="/characters", tags=["characters"])
+app.include_router(auth.router)
 # app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
 @app.get("/")
