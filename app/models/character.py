@@ -21,5 +21,4 @@ class Character(Base):
     is_personal_character = Column(Boolean, default=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-
-conversations = relationship("Conversation", back_populates="character")
+    conversations = relationship("Conversation", back_populates="character")

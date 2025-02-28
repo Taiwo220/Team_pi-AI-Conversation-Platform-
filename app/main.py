@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from .config.db import Base, engine
 from .routers import characters, chat
+from .models import user, character, conversation, message
+
 # from .routers import auth
 
 # Optional: If you need any startup/shutdown events, you can define them here:

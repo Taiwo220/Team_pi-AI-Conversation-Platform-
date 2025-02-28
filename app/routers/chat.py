@@ -12,11 +12,14 @@ from ..models.conversation import Conversation
 from ..models.message import Message
 from ..models.character import Character
 from ..config.dependencies import get_db
+from dotenv import load_dotenv
+load_dotenv()
 
 router = APIRouter()
+
 logger = logging.getLogger(__name__)
 
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = openai.OpenAI()
 
 class MessageRequest(BaseModel):
     message: str
