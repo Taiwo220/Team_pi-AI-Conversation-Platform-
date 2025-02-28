@@ -1,48 +1,60 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select  # Import select
+from ..models.user import User
+from ..schemas.auth import UserCreate, UserLogin, Token
+from ..utils.auth import hash_password, verify_password, create_access_token, retrieve_token_data
+from ..config.dependencies import get_db
+from typing import Dict, Any
+from pydantic import BaseModel
 
-import os
-import jwt  # pyjwt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+class UserTokenData(BaseModel):
+    id: int
+    name: str
+    email: str
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "some-secret")
+router = APIRouter()
+@router.post("/signup", response_model=Token)
+async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == user.email))
+    existing_user = result.scalars().first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
 
-class UserTokenData:
+    # Hash password and create user
+    hashed_password = hash_password(user.password)
+    new_user = User(email=user.email, hashed_password=hashed_password, name=user.name, username=user.username)
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    # Generate token
+    access_token = create_access_token(data={"sub": user.email})
+    return {"message":"Signup Successful", "access_token": access_token, "token_type": "bearer"}
+
+# Login route
+@router.post("/login", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+    # Get user from database
+    result = await db.execute(select(User).where(User.email == form_data.username))
+    user = result.scalars().first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect email or password")
+
+    # Generate token
+    access_token = create_access_token(data={
+        "user_id": user.id,
+        "name": user.name,
+        "email": user.email
+    })
+    return {"message":"Login Successful", "access_token": access_token, "token_type": "bearer"}
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
     """
-    A simple class or pydantic model to represent the user data we store in the token.
+    Decode the JWT token and return its payload (the data field).
     """
-    def __init__(self, user_id: int, name: str, email: str):
-        self.id = user_id
-        self.name = name
-        self.email = email
-
-def get_current_user(token: str = Depends(oauth2_scheme)) -> UserTokenData:
-    """
-    Decodes the JWT token from the 'Authorization: Bearer <token>' header
-    and returns user info (id, name, email).
-    """
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        user_id: int = payload.get("user_id")
-        name: str = payload.get("name")
-        email: str = payload.get("email")
-
-        if user_id is None or name is None or email is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token",
-            )
-        return UserTokenData(user_id, name, email)
-
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired"
-        )
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
-        )
-
+    token_data = retrieve_token_data(token)
+    return token_data
