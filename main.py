@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from app.config import Settings, engine, Base
 from auth.routers import router
 
@@ -7,6 +8,15 @@ settings = Settings()
 
 # Create FastAPI app
 app = FastAPI(title="FastAPI Auth Example")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Root endpoint
 @app.get("/")
