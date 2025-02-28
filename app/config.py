@@ -3,7 +3,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from pydantic_settings import BaseSettings
 
 # Database URL (SQLite)
-DATABASE_URL = "sqlite+aiosqlite:///./test.db"
+DATABASE_URL = "sqlite+aiosqlite:///./database.db"
 
 # Pydantic settings
 class Settings:
