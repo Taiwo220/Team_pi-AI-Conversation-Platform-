@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, Boolean, ForeignKey
 from ..config.db import Base
+from sqlalchemy.orm import relationship
 
 class Character(Base):
     __tablename__ = "characters"
@@ -19,3 +20,6 @@ class Character(Base):
 
     is_personal_character = Column(Boolean, default=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+
+conversations = relationship("Conversation", back_populates="character")

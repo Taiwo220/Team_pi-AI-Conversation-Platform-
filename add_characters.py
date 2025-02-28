@@ -8,7 +8,6 @@ from app.config.db import SessionLocal
 from app.models.character import Character
 
 def main():
-    # Load the characters.json from project root
     data_file = Path("characters.json")
     if not data_file.is_file():
         print("Error: characters.json not found in project root.")
@@ -36,7 +35,7 @@ def main():
                 motivations=char_data.get("motivations"),
                 quirks_habits=char_data.get("quirks_habits"),
                 example_sentences=char_data.get("example_sentences"),
-                is_personal_character=False,  # or True if desired
+                is_personal_character=False,
                 owner_id=None
             )
             db.add(new_char)
