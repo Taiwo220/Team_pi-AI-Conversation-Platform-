@@ -26,7 +26,7 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
 
     # Hash password and create user
     hashed_password = hash_password(user.password)
-    new_user = User(email=user.email, hashed_password=hashed_password)
+    new_user = User(email=user.email, hashed_password=hashed_password, name=user.name, username=user.username)
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
