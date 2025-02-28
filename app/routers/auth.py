@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select  # Import select
@@ -10,7 +10,7 @@ from typing import Dict, Any
 from pydantic import BaseModel
 
 class UserTokenData(BaseModel):
-    id: int
+    user_id: int
     name: str
     email: str
 
@@ -20,11 +20,11 @@ router = APIRouter()
 @router.post("/signup", response_model=Token)
 async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == user.email))
-    existing_user = result.scalars().first()
+    existing_user = result.scalar_one_or_none()
+
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash password and create user
     hashed_password = hash_password(user.password)
     new_user = User(email=user.email, hashed_password=hashed_password, name=user.name, username=user.username)
     db.add(new_user)
@@ -32,15 +32,20 @@ async def signup(user: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(new_user)
 
     # Generate token
-    access_token = create_access_token(data={"sub": user.email})
-    return {"message":"Signup Successful", "access_token": access_token, "token_type": "bearer"}
+    access_token = create_access_token(data={
+        "user_id": new_user.id,
+        "name": user.name,
+        "email": user.email
+    })
+    return {"message": "Signup Successful", "access_token": access_token, "token_type": "bearer"}
+
 
 # Login route
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+async def login(form_data: UserLogin, db: AsyncSession = Depends(get_db)):
     # Get user from database
-    result = await db.execute(select(User).where(User.email == form_data.username))
-    user = result.scalars().first()
+    result = await db.execute(select(User).where(User.email == form_data.email))
+    user = result.scalar_one_or_none()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
 
@@ -57,4 +62,5 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
     Decode the JWT token and return its payload (the data field).
     """
     token_data = retrieve_token_data(token)
+    print(token_data)
     return token_data

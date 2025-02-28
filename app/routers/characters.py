@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from pydantic import ValidationError
 from typing import List, Any, Dict
 from sqlalchemy import and_
+from sqlalchemy.future import select
 from .auth import get_current_user, UserTokenData
 from ..config.dependencies import get_db
 from ..models.character import Character
@@ -69,7 +70,7 @@ def deserialize_list_fields_many(chars: List[Character]) -> List[Character]:
     return chars
 
 @router.get("/", response_model=List[CharacterOut])
-def get_characters(
+async def get_characters(
     db: Session = Depends(get_db),
     current_user: UserTokenData = Depends(get_current_user)
 ):
@@ -78,17 +79,17 @@ def get_characters(
     - public (non-personal) characters (is_personal_character=False), or
     - personal characters owned by the current user.
     """
-    chars = (
-        db.query(Character)
-        .filter(
-            and_(
-                Character.is_personal_character == False,
-                Character.owner_id == current_user.id
-            )
+    print(current_user, current_user.user_id)
+    stmt = select(Character).where(
+        and_(
+            Character.is_personal_character == False,
+            Character.owner_id == current_user.user_id
         )
-        .all()
     )
-
+    
+    result = await db.execute(stmt)
+    chars = result.scalars().all()
+    
     # Convert JSON strings to Python lists before returning
     chars = deserialize_list_fields_many(chars)
     return chars
@@ -118,7 +119,7 @@ def create_character(
     """
     # Force personal & ownership
     new_char.is_personal_character = True
-    new_char.owner_id = current_user.id
+    new_char.owner_id = current_user.user_id
 
     # Convert the Pydantic model to a dict, then serialize list fields to JSON strings
     char_data = new_char.dict()
@@ -149,7 +150,7 @@ def update_character(
         raise HTTPException(status_code=404, detail="Character not found")
 
     # Ownership check if personal
-    if char.is_personal_character and char.owner_id != current_user.id:
+    if char.is_personal_character and char.owner_id != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not allowed to modify this character.")
 
     update_data = char_update.dict(exclude_unset=True)
@@ -182,7 +183,7 @@ def update_character_avatar(
         raise HTTPException(status_code=404, detail="Character not found")
 
     # Must be personal & owned by current user
-    if not char.is_personal_character or char.owner_id != current_user.id:
+    if not char.is_personal_character or char.owner_id != current_user.user_id:
         raise HTTPException(
             status_code=403,
             detail="You do not own this character or it's not personal."
@@ -212,7 +213,7 @@ def delete_character(
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
 
-    if char.is_personal_character and char.owner_id != current_user.id:
+    if char.is_personal_character and char.owner_id != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not allowed to delete this character.")
 
     db.delete(char)
@@ -272,7 +273,7 @@ def generate_character_automatically(
 
     # Force personal & ownership
     new_char_data.is_personal_character = True
-    new_char_data.owner_id = current_user.id
+    new_char_data.owner_id = current_user.user_id
 
     # Convert to dict and JSON-serialize list fields
     data_dict = new_char_data.dict()
