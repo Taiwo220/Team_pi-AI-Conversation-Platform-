@@ -1,12 +1,12 @@
 import os
 import openai
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import ValidationError
-from typing import List
-
+from typing import List, Any, Dict
+from sqlalchemy import and_
 from .auth import get_current_user, UserTokenData
-
 from ..config.dependencies import get_db
 from ..models.character import Character
 from ..schemas.character import (
@@ -18,17 +18,79 @@ from ..schemas.character import (
 router = APIRouter()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+
+# ----------------------------
+# Helper Functions
+# ----------------------------
+def serialize_list_fields(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert Python list fields (personality_traits, quirks_habits, example_sentences)
+    into JSON strings for storage in the DB.
+    """
+    list_fields = ["personality_traits", "quirks_habits", "example_sentences"]
+    for field in list_fields:
+        value = data.get(field)
+        if isinstance(value, list):
+            data[field] = json.dumps(value)
+    return data
+
+def deserialize_list_fields(char: Character) -> Character:
+    """
+    Convert JSON strings in DB back into Python lists so that
+    Pydantic schemas (CharacterOut) show actual lists to the user.
+    """
+    if char.personality_traits:
+        try:
+            char.personality_traits = json.loads(char.personality_traits)
+        except json.JSONDecodeError:
+            pass  # If it's not valid JSON, leave as-is or handle error
+
+    if char.quirks_habits:
+        try:
+            char.quirks_habits = json.loads(char.quirks_habits)
+        except json.JSONDecodeError:
+            pass
+
+    if char.example_sentences:
+        try:
+            char.example_sentences = json.loads(char.example_sentences)
+        except json.JSONDecodeError:
+            pass
+
+    return char
+
+
+def deserialize_list_fields_many(chars: List[Character]) -> List[Character]:
+    """
+    Convenience method to deserialize multiple Character objects at once.
+    """
+    for c in chars:
+        deserialize_list_fields(c)
+    return chars
+
 @router.get("/", response_model=List[CharacterOut])
 def get_characters(
     db: Session = Depends(get_db),
     current_user: UserTokenData = Depends(get_current_user)
 ):
     """
-    Fetch all characters.
-    Now requires authentication. 
-    If you want this public, remove `current_user` or handle permissions differently.
+    Fetch only:
+    - public (non-personal) characters (is_personal_character=False), or
+    - personal characters owned by the current user.
     """
-    chars = db.query(Character).all()
+    chars = (
+        db.query(Character)
+        .filter(
+            and_(
+                Character.is_personal_character == False,
+                Character.owner_id == current_user.id
+            )
+        )
+        .all()
+    )
+
+    # Convert JSON strings to Python lists before returning
+    chars = deserialize_list_fields_many(chars)
     return chars
 
 @router.get("/{character_id}", response_model=CharacterOut)
@@ -40,6 +102,9 @@ def get_character(
     char = db.query(Character).get(character_id)
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
+
+    # Deserialize list fields
+    deserialize_list_fields(char)
     return char
 
 @router.post("/", response_model=CharacterOut, status_code=status.HTTP_201_CREATED)
@@ -49,17 +114,24 @@ def create_character(
     current_user: UserTokenData = Depends(get_current_user)
 ):
     """
-    Create a new character.
-    You can decide if all characters created this way are 'personal'
-    or if you allow 'public' characters as well.
+    Create a new character, personal to the user.
     """
+    # Force personal & ownership
     new_char.is_personal_character = True
     new_char.owner_id = current_user.id
 
-    char = Character(**new_char.dict())
+    # Convert the Pydantic model to a dict, then serialize list fields to JSON strings
+    char_data = new_char.dict()
+    char_data = serialize_list_fields(char_data)
+
+    # Create and save
+    char = Character(**char_data)
     db.add(char)
     db.commit()
     db.refresh(char)
+
+    # Deserialize before returning, so the response matches the schema
+    deserialize_list_fields(char)
     return char
 
 @router.put("/{character_id}", response_model=CharacterOut)
@@ -69,19 +141,62 @@ def update_character(
     db: Session = Depends(get_db),
     current_user: UserTokenData = Depends(get_current_user)
 ):
+    """
+    Update an existing character's fields, including potential list fields.
+    """
     char = db.query(Character).get(character_id)
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
 
+    # Ownership check if personal
     if char.is_personal_character and char.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed to modify this character.")
 
     update_data = char_update.dict(exclude_unset=True)
+    # Serialize any list fields so we store them as JSON
+    update_data = serialize_list_fields(update_data)
+
+    # Apply updates
     for field, value in update_data.items():
         setattr(char, field, value)
 
     db.commit()
     db.refresh(char)
+
+    deserialize_list_fields(char)
+    return char
+
+@router.patch("/{character_id}/avatar", response_model=CharacterOut)
+def update_character_avatar(
+    character_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: UserTokenData = Depends(get_current_user)
+):
+    """
+    Updates only the `image_url` for a personal character that the user owns.
+    If the character is not personal or the user doesn't own it, raises 403.
+    """
+    char = db.query(Character).get(character_id)
+    if not char:
+        raise HTTPException(status_code=404, detail="Character not found")
+
+    # Must be personal & owned by current user
+    if not char.is_personal_character or char.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not own this character or it's not personal."
+        )
+
+    new_image_url = payload.get("image_url")
+    if not new_image_url:
+        raise HTTPException(status_code=422, detail="No image_url provided.")
+
+    char.image_url = new_image_url
+    db.commit()
+    db.refresh(char)
+
+    deserialize_list_fields(char)
     return char
 
 @router.delete("/{character_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -90,6 +205,9 @@ def delete_character(
     db: Session = Depends(get_db),
     current_user: UserTokenData = Depends(get_current_user)
 ):
+    """
+    Delete a character if the user owns it (if personal).
+    """
     char = db.query(Character).get(character_id)
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -109,13 +227,13 @@ def generate_character_automatically(
 ):
     """
     Generate a character dynamically using ChatGPT, then save to the database.
-    We'll set the owner_id from the JWT token, ensuring it's personal to this user.
+    We'll ensure it's personal to this user, and handle list fields as JSON.
     """
     user_prompt = build_character_prompt(preferences)
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
@@ -152,16 +270,22 @@ def generate_character_automatically(
             detail=f"Invalid JSON from AI: {ve}"
         )
 
+    # Force personal & ownership
     new_char_data.is_personal_character = True
     new_char_data.owner_id = current_user.id
 
-    char_model = Character(**new_char_data.dict())
+    # Convert to dict and JSON-serialize list fields
+    data_dict = new_char_data.dict()
+    data_dict = serialize_list_fields(data_dict)
+
+    char_model = Character(**data_dict)
     db.add(char_model)
     db.commit()
     db.refresh(char_model)
 
+    # Convert fields back to list for the response
+    deserialize_list_fields(char_model)
     return char_model
-
 
 def build_character_prompt(preferences: dict) -> str:
     prompt_parts = [

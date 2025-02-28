@@ -1,72 +1,48 @@
-from fastapi import APIRouter, Form, Request, Depends
-from starlette.responses import RedirectResponse
-from sqlalchemy.orm import Session
-from config.dependencies import get_db
-from models.user import User
-from utils import hash_password, verify_password, get_form_signupdata, get_form_logindata
-from fastapi.templating import Jinja2Templates
 
-router = APIRouter()
-templates = Jinja2Templates(directory="templates")
+import os
+import jwt  # pyjwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 
-@router.get("/")
-def signup_page(request: Request):
-    return templates.TemplateResponse("signup.html", {"request": request, "user": None})
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-@router.post("/signup")
-def signup(request: Request, fields: dict = Depends(get_form_signupdata), db = Depends(get_db)):
-    hashed_password = hash_password(fields["password"])
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "some-secret")
 
-    # check if user already exists
-    existing_user = db.query(User).filter(User.email == fields["email"]).first()
-    if existing_user:
-        return templates.TemplateResponse("signup.html", {"request": request, "error": "User already exists"})
-    
-    new_user = User(
-        username=fields["username"],
-        email=fields["email"],
-        password=hashed_password
-    )
-    db.add(new_user)
-    db.commit()
+class UserTokenData:
+    """
+    A simple class or pydantic model to represent the user data we store in the token.
+    """
+    def __init__(self, user_id: int, name: str, email: str):
+        self.id = user_id
+        self.name = name
+        self.email = email
 
-    return RedirectResponse("/login", status_code=302)
+def get_current_user(token: str = Depends(oauth2_scheme)) -> UserTokenData:
+    """
+    Decodes the JWT token from the 'Authorization: Bearer <token>' header
+    and returns user info (id, name, email).
+    """
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        user_id: int = payload.get("user_id")
+        name: str = payload.get("name")
+        email: str = payload.get("email")
 
+        if user_id is None or name is None or email is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token",
+            )
+        return UserTokenData(user_id, name, email)
 
-@router.get("/login")
-def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "user": None})
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired"
+        )
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
 
-@router.post("/login")
-def login(request: Request, fields: dict = Depends(get_form_logindata), db = Depends(get_db)):
-    user = db.query(User).filter(User.email == fields["email"]).first()
-
-    if not user or not verify_password(fields["password"], user.password):
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"})
-    
-    response = RedirectResponse("/dashboard", status_code=302)
-    response.set_cookie(key="user", value=user.email, httponly=True)
-
-    return response    
-
-
-# @router.get("/dashboard")
-# def dashboard(request: Request, db: Session = Depends(get_db)):
-#     user_email = request.cookies.get("user")
-#     if not user_email:
-#         return RedirectResponse("/login")
-
-#     user = db.query(User).filter(User.email == user_email).first()
-#     if not user:
-#         return RedirectResponse("/login")
-
-#     characters = db.query(Character).all()  # Fetch characters from database
-
-#     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "characters": characters})
-
-
-@router.get("/logout")
-def logout(response: RedirectResponse):
-    response = RedirectResponse("/login", status_code=302)
-    response.delete_cookie("user")
-    return response
