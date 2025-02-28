@@ -1,3 +1,4 @@
+
 import os
 import jwt  # pyjwt
 from fastapi import Depends, HTTPException, status
@@ -44,3 +45,4 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> UserTokenData:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token"
         )
+
