@@ -1,117 +1,72 @@
-# app/routers/auth.py
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from passlib.context import CryptContext
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-import sqlite3
+from fastapi import APIRouter, Form, Request, Depends
+from starlette.responses import RedirectResponse
+from sqlalchemy.orm import Session
+from config.dependencies import get_db
+from models.user import User
+from utils import hash_password, verify_password, get_form_signupdata, get_form_logindata
+from fastapi.templating import Jinja2Templates
 
-# Router instance
 router = APIRouter()
+templates = Jinja2Templates(directory="templates")
 
-# JWT Configuration
-SECRET_KEY = "your-secret-key"  # Replace with a secure key
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+@router.get("/")
+def signup_page(request: Request):
+    return templates.TemplateResponse("signup.html", {"request": request, "user": None})
 
-# Password Hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# OAuth2 Scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# Models
-class User(BaseModel):
-    username: str
-    email: str
-
-class UserInDB(User):
-    password_hash: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class TokenData(BaseModel):
-    username: str | None = None
-
-# Helper Functions
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def get_user(db, username: str):
-    cursor = db.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-    user = cursor.fetchone()
-    if user:
-        return UserInDB(username=user[1], email=user[2], password_hash=user[3])
-    return None
-
-# Database Connection
-def get_db():
-    db = sqlite3.connect("app.db")
-    try:
-        yield db
-    finally:
-        db.close()
-
-# Sign Up Route
 @router.post("/signup")
-def signup(username: str, email: str, password: str, db: sqlite3.Connection = Depends(get_db)):
-    cursor = db.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ? OR email = ?", (username, email))
-    if cursor.fetchone():
-        raise HTTPException(status_code=400, detail="Username or email already registered")
+def signup(request: Request, fields: dict = Depends(get_form_signupdata), db = Depends(get_db)):
+    hashed_password = hash_password(fields["password"])
 
-    password_hash = get_password_hash(password)
-    cursor.execute("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)", (username, email, password_hash))
+    # check if user already exists
+    existing_user = db.query(User).filter(User.email == fields["email"]).first()
+    if existing_user:
+        return templates.TemplateResponse("signup.html", {"request": request, "error": "User already exists"})
+    
+    new_user = User(
+        username=fields["username"],
+        email=fields["email"],
+        password=hashed_password
+    )
+    db.add(new_user)
     db.commit()
 
-    return {"message": "User created successfully"}
+    return RedirectResponse("/login", status_code=302)
 
-@router.post("/token", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: sqlite3.Connection = Depends(get_db)):
-    user = get_user(db, form_data.username)
-    if not user or not verify_password(form_data.password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
 
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
+@router.get("/login")
+def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "user": None})
 
-    return {"access_token": access_token, "token_type": "bearer"}
+@router.post("/login")
+def login(request: Request, fields: dict = Depends(get_form_logindata), db = Depends(get_db)):
+    user = db.query(User).filter(User.email == fields["email"]).first()
 
-@router.get("/users/me", response_model=User)
-def read_users_me(token: str = Depends(oauth2_scheme), db: sqlite3.Connection = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-        token_data = TokenData(username=username)
-    except JWTError:
-        raise credentials_exception
+    if not user or not verify_password(fields["password"], user.password):
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"})
+    
+    response = RedirectResponse("/dashboard", status_code=302)
+    response.set_cookie(key="user", value=user.email, httponly=True)
 
-    user = get_user(db, username=token_data.username)
-    if user is None:
-        raise credentials_exception
+    return response    
 
-    return user
+
+# @router.get("/dashboard")
+# def dashboard(request: Request, db: Session = Depends(get_db)):
+#     user_email = request.cookies.get("user")
+#     if not user_email:
+#         return RedirectResponse("/login")
+
+#     user = db.query(User).filter(User.email == user_email).first()
+#     if not user:
+#         return RedirectResponse("/login")
+
+#     characters = db.query(Character).all()  # Fetch characters from database
+
+#     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "characters": characters})
+
+
+@router.get("/logout")
+def logout(response: RedirectResponse):
+    response = RedirectResponse("/login", status_code=302)
+    response.delete_cookie("user")
+    return response
