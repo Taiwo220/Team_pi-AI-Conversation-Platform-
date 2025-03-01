@@ -98,7 +98,3 @@ Each contributor’s work can be found in the following links:
 - Custom embeddings instead of OpenAI embeddings to reduce API costs.
 - Audio & video-based interactions for enhanced engagement.
 - More sophisticated memory retention across sessions.
-
-## Submission Status
-
-The backend is functional, and the frontend is being finalized. Submission is expected before 9 PM as per the extended deadline.
