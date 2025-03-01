@@ -64,48 +64,93 @@ async def store_message_embedding(conversation_id: int, message: str, role: str)
         metadatas=[{"conversation_id": conversation_id, "role": role}]
     )
 
-async def retrieve_relevant_messages(conversation_id: int, query: str, top_k=8):
+async def retrieve_recent_and_relevant_messages(db: AsyncSession, conversation_id: int, query: str, top_k_relevant=6):
     """
-    Retrieves the top-k most relevant past messages for context using ChromaDB's vector search,
-    filtered to only include messages from the given conversation.
-    Falls back to the most recent messages if no good matches are found.
+    Retrieves both:
+    1. The most recent messages (last 2 from user, last 2 from assistant)
+    2. The top-k most relevant past messages for context using vector search
+    
+    Combines them while removing duplicates to provide better context.
     """
+    """
+    Retrieves both:
+    1. The most recent messages (last 2 from user, last 2 from assistant)
+    2. The top-k most relevant past messages for context using vector search
+    
+    Combines them while removing duplicates to provide better context.
+    """
+    # Fetch the most recent messages
+    from sqlalchemy import select, desc
+    
+    # Get last 2 user messages
+    user_msg_query = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id, Message.role == "user")
+        .order_by(desc(Message.created_at))
+        .limit(2)
+    )
+    user_result = await db.execute(user_msg_query)
+    recent_user_msgs = user_result.scalars().all()
+    
+    # Get last 2 assistant messages
+    assistant_msg_query = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id, Message.role == "assistant")
+        .order_by(desc(Message.created_at))
+        .limit(2)
+    )
+    assistant_result = await db.execute(assistant_msg_query)
+    recent_assistant_msgs = assistant_result.scalars().all()
+    
+    # Format recent messages for the context
+    recent_messages = []
+    for msg in sorted(recent_user_msgs + recent_assistant_msgs, 
+                     key=lambda x: x.created_at, reverse=True):
+        recent_messages.append({
+            "role": msg.role,
+            "content": msg.content
+        })
+    
+    # Also get vector-based relevant messages
     query_embedding = client.embeddings.create(
         model="text-embedding-ada-002", input=query
     ).data[0].embedding
 
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=top_k * 2  # retrieve more than needed so we have enough after filtering
+        n_results=top_k_relevant * 2  # retrieve more than needed for filtering
     )
 
-    filtered_results = []
+    relevant_messages = []
     if results and "documents" in results and results["documents"]:
         for i in range(len(results["documents"][0])):
             metadata = results["metadatas"][0][i]
             if metadata.get("conversation_id") == conversation_id:
-                filtered_results.append({
+                relevant_messages.append({
                     "role": metadata.get("role"),
                     "content": results["documents"][0][i]
                 })
-
-    if not filtered_results:
-        logger.warning(
-            f"No relevant messages found for conversation {conversation_id} from vector search. "
-            "Fetching latest messages as fallback."
-        )
-        recent_results = collection.peek(top_k * 2)
-        filtered_recent = []
-        for i in range(len(recent_results["documents"])):
-            metadata = recent_results["metadatas"][i]
-            if metadata.get("conversation_id") == conversation_id:
-                filtered_recent.append({
-                    "role": metadata.get("role"),
-                    "content": recent_results["documents"][i]
-                })
-        return filtered_recent[:top_k]
-
-    return filtered_results[:top_k]
+    
+    # Combine both sets, removing duplicates
+    # Use content as a key for duplicate detection
+    combined_messages = []
+    seen_contents = set()
+    
+    # Add recent messages first (priority)
+    for msg in recent_messages:
+        if msg["content"] not in seen_contents:
+            combined_messages.append(msg)
+            seen_contents.add(msg["content"])
+    
+    # Then add relevant messages if not duplicates
+    for msg in relevant_messages:
+        if msg["content"] not in seen_contents:
+            combined_messages.append(msg)
+            seen_contents.add(msg["content"])
+    
+    # Limit to a reasonable number of total messages
+    max_context_messages = top_k_relevant + 4  # Relevant + recent
+    return combined_messages[:max_context_messages]
 
 def build_character_system_message(character: Character) -> str:
     """
@@ -471,7 +516,8 @@ async def send_message(
     current_user: UserTokenData = Depends(get_current_user)
 ):
     """
-    Uses a vector database to retrieve only relevant past messages instead of the entire chat history.
+    Uses a combination of recent messages and vector database retrieval to provide
+    better context for AI response generation.
     """
     try:
         model = os.getenv("OPENAI_DEFAULT_MODEL")
@@ -496,15 +542,14 @@ async def send_message(
             await db.flush()
         await store_message_embedding(conversation.id, request.message, "user")
 
-        relevant_messages = await retrieve_relevant_messages(conversation.id, request.message)
-
+        context_messages = await retrieve_recent_and_relevant_messages(db, conversation.id, request.message)
+        
         character_system = build_advanced_character_system(character)
-
-        relevant_messages = await retrieve_relevant_messages(conversation.id, request.message)
-        system_with_context = integrate_with_conversation_handler(character_system, relevant_messages)
+        system_with_context = integrate_with_conversation_handler(character_system, context_messages)
 
         openai_messages = [{"role": "system", "content": system_with_context}]
-        openai_messages.extend(relevant_messages)
+        openai_messages.extend(context_messages)
+        
         openai_messages.append({"role": "user", "content": request.message})
 
         ai_content = await generate_ai_response(openai_messages, model)
