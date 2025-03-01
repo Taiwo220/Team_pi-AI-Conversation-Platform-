@@ -182,6 +182,88 @@ async def generate_ai_response(messages, model):
             )
         
 
+@router.get("/conversations")
+async def get_user_conversations(
+    db: AsyncSession = Depends(get_db),
+    current_user: UserTokenData = Depends(get_current_user)
+):
+    """
+    Fetches all conversations that the current user is involved in,
+    including character information for each conversation.
+    
+    Returns:
+        A list of conversations with:
+        - conversation_id
+        - created_at
+        - updated_at
+        - character information (name, nationality, profession, etc.)
+        - last_message content and timestamp
+    """
+    try:
+        from sqlalchemy import select, desc, func
+        from sqlalchemy.orm import selectinload
+        
+        query = (
+            select(Conversation)
+            .where(Conversation.user_id == current_user.user_id)
+            .options(selectinload(Conversation.character))
+            .order_by(desc(Conversation.updated_at))
+        )
+        
+        result = await db.execute(query)
+        conversations = result.scalars().all()
+        
+        conversation_data = []
+        for conversation in conversations:
+            latest_message_query = (
+                select(Message)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(desc(Message.created_at))
+                .limit(1)
+            )
+            
+            message_result = await db.execute(latest_message_query)
+            latest_message = message_result.scalar_one_or_none()
+            
+            character = conversation.character
+            conversation_info = {
+                "conversation_id": conversation.id,
+                "created_at": conversation.created_at,
+                "updated_at": conversation.updated_at,
+                "character": {
+                    "id": character.id,
+                    "name": character.name,
+                    "nationality": character.nationality,
+                    "profession": character.profession,
+                    "background": character.background,
+                    "personality_traits": character.personality_traits,
+                    "motivations": character.motivations,
+                    "quirks_habits": character.quirks_habits,
+                },
+                "last_message": None
+            }
+            
+            if latest_message:
+                conversation_info["last_message"] = {
+                    "content": latest_message.content,
+                    "role": latest_message.role,
+                    "created_at": latest_message.created_at
+                }
+                
+            conversation_data.append(conversation_info)
+            
+        return {
+            "conversations": conversation_data,
+            "count": len(conversation_data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching user conversations: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve conversations"
+        )
+
 @router.post("/start/{character_id}")
 async def start_conversation(
     character_id: int,
