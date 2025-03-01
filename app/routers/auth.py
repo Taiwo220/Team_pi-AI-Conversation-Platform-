@@ -57,10 +57,10 @@ async def login(form_data: UserLogin, db: AsyncSession = Depends(get_db)):
     })
     return {"message":"Login Successful", "access_token": access_token, "token_type": "bearer"}
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+def get_current_user(token: str = Depends(oauth2_scheme)) -> UserTokenData:
     """
     Decode the JWT token and return its payload (the data field).
     """
     token_data = retrieve_token_data(token)
     print(token_data)
-    return token_data
+    return UserTokenData(**token_data)

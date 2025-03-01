@@ -18,13 +18,20 @@ class CharacterBase(BaseModel):
     owner_id: Optional[int] = None
 
     @model_validator(mode="before")
-    def check_owner_if_personal_character(cls, values):
-        is_personal = values.get("is_personal_character")
-        owner_id = values.get("owner_id")
-
-        if is_personal and not owner_id:
+    @classmethod
+    def check_owner_if_personal_character(cls, data):
+        """Ensure `owner_id` is set if `is_personal_character` is True."""
+        if isinstance(data, dict):  
+            is_personal = data.get("is_personal_character")
+            owner_id = data.get("owner_id")
+        else:  
+            is_personal = getattr(data, "is_personal_character", None)
+            owner_id = getattr(data, "owner_id", None)
+    
+        if is_personal and owner_id is None:
             raise ValueError("owner_id must be provided if is_personal_character is True.")
-        return values
+    
+        return data
 
 
 class CharacterCreate(CharacterBase):
