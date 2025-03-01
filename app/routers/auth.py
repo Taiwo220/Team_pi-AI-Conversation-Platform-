@@ -63,3 +63,10 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> UserTokenData:
     """
     token_data = retrieve_token_data(token)
     return UserTokenData(**token_data)
+
+@router.get("/me", response_model=UserTokenData)
+async def get_me(current_user: UserTokenData = Depends(get_current_user)):
+    """
+    Returns the currently authenticated user's information.
+    """
+    return current_user
