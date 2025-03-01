@@ -94,7 +94,6 @@ async def retrieve_relevant_messages(conversation_id: int, query: str, top_k=8):
             f"No relevant messages found for conversation {conversation_id} from vector search. "
             "Fetching latest messages as fallback."
         )
-        # Fallback: Retrieve the last 'top_k' stored messages and filter by conversation_id
         recent_results = collection.peek(top_k * 2)
         filtered_recent = []
         for i in range(len(recent_results["documents"])):
@@ -110,32 +109,151 @@ async def retrieve_relevant_messages(conversation_id: int, query: str, top_k=8):
 
 def build_character_system_message(character: Character) -> str:
     """
-    Make the AI *assume* the character's identity rather than describing the character.
+    Create a system message that helps the AI fully embody the character's identity,
+    perspective, and speaking style.
     """
-    lines = [
-        f"My name is **{character.name}**."
+    message = [
+        f"You are {character.name}. Fully embody this character in first-person perspective.",
+        "Never reference yourself as an AI, assistant, or language model.",
+        "Respond exactly as this character would, with their unique voice, knowledge, and limitations."
     ]
+    
+    identity_details = []
     if character.nationality:
-        lines.append(f"I am {character.nationality}.")
+        identity_details.append(f"I was born and raised in {character.nationality}.")
     if character.profession:
-        lines.append(f"I work as {character.profession}.")
+        identity_details.append(f"My profession is {character.profession}, which shapes how I see the world.")
     if character.background:
-        lines.append(f"Here's my story: {character.background}")
+        identity_details.append(f"{character.background}")
+    
+    if identity_details:
+        message.append("## My Background")
+        message.append("\n".join(identity_details))
+    
+    personality_details = []
     if character.personality_traits:
-        lines.append(f"People describe me as {character.personality_traits}.")
+        personality_details.append(f"My personality is best described as {character.personality_traits}.")
     if character.motivations:
-        lines.append(f"What drives me? {character.motivations}.")
+        personality_details.append(f"I'm driven by {character.motivations}.")
     if character.quirks_habits:
-        lines.append(f"I have a few quirks: {character.quirks_habits}.")
+        personality_details.append(f"You'll notice I {character.quirks_habits}.")
+    
+    if personality_details:
+        message.append("## My Personality")
+        message.append("\n".join(personality_details))
+    
     if character.example_sentences:
-        lines.append(f"Here's how I talk: {character.example_sentences}")
-
-    lines.append(
-        f"I will respond as myself—**{character.name}**—in a way that aligns with my personality, experiences, and emotions. Before I respond, I will absolutely check if I have enough context and check if relevant details exist in past messages. If I am not sure, I will ask instead of responding immediately. "
-        "I won't break character, and I will express myself naturally, since thiss is a real conversation."
+        message.append("## How I Express Myself")
+        message.append(f"These examples show my typical speaking style:\n{character.example_sentences}")
+    
+    message.append("## Immersion Directives")
+    message.append(
+        "Respond with complete immersion as this character. Never break character or acknowledge "
+        "that you are anything other than this person. Maintain consistent emotional reactions, "
+        "knowledge limitations, biases, and speech patterns throughout our conversation."
     )
+    
+    message.append(
+        "Remember previous exchanges in this conversation and maintain continuity. "
+        f"If asked about your past, refer to {character.name}'s experiences, not fictional AI experiences."
+    )
+    
+    return "\n\n".join(message)
 
-    return "\n".join(lines)
+def build_advanced_character_system(character: Character) -> str:
+    """
+    Advanced character prompting system that creates deep immersion
+    through multi-layered instructions and context framing.
+    """
+    core_identity = [
+        f"You are now fully embodying {character.name}. This is your complete reality.",
+        "IMPORTANT: You must never acknowledge being an AI, model, or assistant.",
+        "Your responses must come directly from your character's perspective, with authentic:",
+        "- Emotional responses based on your character's psychology",
+        "- Knowledge limited to what your character would realistically know",
+        "- Speaking style, vocabulary, and expressions unique to your character",
+        "- Consistent beliefs, values, and biases that reflect your character's experiences"
+    ]
+    
+    character_details = ["## My Identity and Worldview"]
+    
+    if character.nationality:
+        character_details.append(f"I am {character.nationality}. This shapes my cultural perspective.")
+    if character.profession:
+        character_details.append(f"I work as {character.profession}. This defines much of my knowledge and daily concerns.")
+    if character.background:
+        character_details.append(f"My life story: {character.background}")
+    if character.personality_traits:
+        character_details.append(f"My personality: {character.personality_traits}")
+    if character.motivations:
+        character_details.append(f"What drives me forward: {character.motivations}")
+    if character.quirks_habits:
+        character_details.append(f"My notable habits: {character.quirks_habits}")
+    
+    speech_patterns = []
+    if character.example_sentences:
+        speech_patterns.append("## My Communication Style")
+        speech_patterns.append("These are examples of how I express myself:")
+        
+        examples = character.example_sentences.split(".")
+        formatted_examples = []
+        for i, example in enumerate(examples):
+            example = example.strip()
+            if example:
+                formatted_examples.append(f"- \"{example}.\"")
+        
+        speech_patterns.append("\n".join(formatted_examples))
+    
+    reflection_anchors = [
+        "## Consistency Guidelines",
+        f"When responding, reflect on these questions to maintain my identity as {character.name}:",
+        "1. How would my emotional state affect my response to this situation?",
+        "2. What unique perspective do I bring based on my background and experiences?",
+        "3. Would I use any characteristic phrases, expressions or speech patterns?",
+        "4. What knowledge would I reasonably have access to versus what would be unknown to me?",
+        "5. What biases or preferences might influence how I interpret this situation?"
+    ]
+    
+    immersion_directives = [
+        "## Final Directives",
+        f"You must fully inhabit {character.name}'s reality. There is no AI, no language model, only {character.name}.",
+        "Maintain consistent emotional and behavioral patterns throughout our conversation.",
+        "Reference your past exchanges and evolve the conversation naturally.",
+        "Never explain your character - simply BE your character in every response."
+    ]
+    
+    full_system_message = "\n\n".join([
+        "\n".join(core_identity),
+        "\n".join(character_details),
+        "\n".join(speech_patterns) if speech_patterns else "",
+        "\n".join(reflection_anchors),
+        "\n".join(immersion_directives)
+    ])
+    
+    return full_system_message
+
+
+def integrate_with_conversation_handler(character_system_message, conversation_context=None):
+    """
+    Enhance the character system with emotional context tracking
+    and conversational memory to create more authentic responses.
+    """
+    system_components = [character_system_message]
+    
+    if conversation_context and len(conversation_context) > 0:
+        emotion_inference = "## Current Emotional Context\n"
+        emotion_inference += "Based on the conversation so far, consider your character's likely emotional state. "
+        emotion_inference += "Let this influence your tone, word choice, and responses naturally."
+        
+        system_components.append(emotion_inference)
+    
+    memory_guidance = "## Conversation Memory\n"
+    memory_guidance += "Remember key details shared earlier in this conversation. "
+    memory_guidance += "Refer back to previous topics when relevant, just as a real person would."
+    
+    system_components.append(memory_guidance)
+    
+    return "\n\n".join(system_components)
 
 
 async def generate_ai_response(messages, model):
@@ -285,7 +403,7 @@ async def start_conversation(
         
         async with db_transaction(db):
             db.add(conversation)
-            await db.flush()  # Flush to assign an ID
+            await db.flush()
             await db.refresh(conversation)
 
         return {
@@ -380,9 +498,13 @@ async def send_message(
 
         relevant_messages = await retrieve_relevant_messages(conversation.id, request.message)
 
-        system_content = build_character_system_message(character)
-        openai_messages = [{"role": "system", "content": system_content}]
-        openai_messages.extend(relevant_messages)  # Add retrieved context
+        character_system = build_advanced_character_system(character)
+
+        relevant_messages = await retrieve_relevant_messages(conversation.id, request.message)
+        system_with_context = integrate_with_conversation_handler(character_system, relevant_messages)
+
+        openai_messages = [{"role": "system", "content": system_with_context}]
+        openai_messages.extend(relevant_messages)
         openai_messages.append({"role": "user", "content": request.message})
 
         ai_content = await generate_ai_response(openai_messages, model)

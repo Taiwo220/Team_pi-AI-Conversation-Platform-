@@ -312,7 +312,8 @@ def build_character_prompt(preferences: dict) -> str:
         "- These should capture their **attitude, personality, and speaking style.**\n\n"
         "📜 **Final Output:**\n"
         "Return only a JSON object matching the expected schema. "
-        "Do not include any explanations, markdown, or extra text outside of the JSON."
+        "**Do not include any explanations, markdown, or extra text outside of the JSON.**\n\n"
+        "Do not format the JSON object in markdown (don't do this - ```json ```). Return only the JSON object."
     )
 
     return "\n".join(prompt_parts)
